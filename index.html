@@ -100,6 +100,8 @@ button{font:inherit;color:inherit}
 .cell.today{background:var(--today)}
 .cell.today.alt{background:color-mix(in srgb,var(--today) 80%,var(--band))}
 .cell:hover{background:color-mix(in srgb,var(--accent) 7%,transparent)}
+.makeup{align-self:flex-start;border:1px dashed var(--sub);color:var(--sub);background:var(--sub-soft);border-radius:6px;font-size:11px;font-weight:600;padding:2px 6px;cursor:pointer;font-family:var(--f-ui)}
+.makeup:hover{border-style:solid}
 .cell .plus{opacity:0;margin:auto;color:var(--accent);font-size:20px;line-height:1;transition:opacity .15s}
 .cell:hover .plus,.cell:focus-visible .plus{opacity:1}
 .lesson{font-family:var(--f-pen);font-size:24px;line-height:1.05;position:relative;display:block;width:100%;border:0;background:none;padding:2px 2px;text-align:left;cursor:pointer;border-radius:6px;overflow-wrap:anywhere}
@@ -347,6 +349,11 @@ function render(){
           cell.appendChild(b);
         });
         if (!here.length) cell.appendChild(el('span','plus','+'));
+        else if (here.every(l => l.cancel)){
+          const mk = el('button','makeup','+ 보강');
+          mk.onclick = e => { e.stopPropagation(); openAdd(d,hr,c.id,{ once:true, memo:`${here.map(l=>l.name).join('·')} 취소 자리` }); };
+          cell.appendChild(mk);
+        }
         const add = () => openAdd(d,hr,c.id);
         cell.onclick = add;
         cell.onkeydown = e => { if (e.target===cell && (e.key==='Enter'||e.key===' ')) { e.preventDefault(); add(); } };
@@ -379,16 +386,19 @@ function armedButton(label, armedLabel, cls, action){
   return b;
 }
 
-function openAdd(d,hr,c){
+function openAdd(d,hr,c,opts={}){
   const date = ymd(addDays(S.weekStart,d));
-  let kind = 'weekly';
+  let kind = opts.once ? 'once' : 'weekly';
   openSheet(sh => {
-    const h = el('h2'); h.append('학생 추가'); sh.append(h);
+    const h = el('h2'); h.append(opts.once ? '보강 넣기' : '학생 추가'); sh.append(h);
     sh.append(el('div','sub',`${DAYS[d]}요일 ${md(addDays(S.weekStart,d))} · ${hr}:00–${hr+1}:00 · ${colName(c)}`));
-    const name = textInput('f-name','', '학생 이름');
-    const memo = textInput('f-memo','', '예: 오픽 IH 목표, 2:6 패키지');
+    const name = textInput('f-name','', opts.once ? '보강 받을 학생 이름' : '학생 이름');
+    const dl = el('datalist'); dl.id = 'f-names';
+    [...new Set(Object.values(S.lessons).filter(l=>!l.end).map(l=>l.name))].sort((a,b)=>a.localeCompare(b,'ko')).forEach(n => { const o = el('option'); o.value = n; dl.appendChild(o); });
+    name.setAttribute('list','f-names'); name.autocomplete = 'off';
+    const memo = textInput('f-memo', opts.memo || '', '예: 오픽 IH 목표, 2:6 패키지');
     const seg = el('div','seg');
-    const b1 = el('button','on','매주 반복'), b2 = el('button',null,'이번 주만 (보강)');
+    const b1 = el('button',kind==='weekly'?'on':null,'매주 반복'), b2 = el('button',kind==='once'?'on':null,'이번 주만 (보강)');
     b1.onclick=()=>{kind='weekly';b1.classList.add('on');b2.classList.remove('on')};
     b2.onclick=()=>{kind='once';b2.classList.add('on');b1.classList.remove('on')};
     seg.append(b1,b2);
@@ -397,15 +407,16 @@ function openAdd(d,hr,c){
       const n = name.value.trim(); if (!n){ name.focus(); return; }
       const data = { name:n, memo:memo.value.trim(), day:d, hour:hr, col:c, kind, createdAt:new Date().toISOString() };
       if (kind==='weekly'){ data.start = date; data.end = null; } else data.date = date;
-      closeSheet(); run(() => store.setLesson(store.newId(), data), `${n} 추가됨`);
+      closeSheet(); run(() => store.setLesson(store.newId(), data), kind==='once' ? `${n} 보강 추가됨` : `${n} 추가됨`);
     };
     save.onclick = submit;
     name.onkeydown = e => { if (e.key==='Enter') submit(); };
-    sh.append(field('이름', name), seg, field('메모 (선택)', memo), save);
+    sh.append(field('이름', name), dl, seg, field('메모 (선택)', memo), save);
   });
 }
 
 function openLesson(l){
+  const dIdx = (new Date(l.dateStr+'T00:00').getDay()+6)%7;
   openSheet(sh => {
     const h = el('h2'); const pen = el('span','pen',l.name); pen.style.color = colColor(l.col);
     h.append(pen, el('span','sub', l.kind==='once' ? '보강 · 이번 주만' : '매주 수업'));
@@ -418,7 +429,9 @@ function openLesson(l){
       box.append(el('div','r',`취소됨 · ${l.cancel.reason||'사유 없음'}`));
       const undo = el('button','btn ghost','취소 되돌리기');
       undo.onclick = () => { closeSheet(); run(()=>store.uncancel(l.id,l.dateStr),'수업을 되살렸어요'); };
-      box.append(undo); cs.append(box);
+      const fill = el('button','btn primary','이 자리에 보강 넣기');
+      fill.onclick = () => openAdd(dIdx, l.hour, l.col, { once:true, memo:`${l.name} 취소 자리` });
+      box.append(fill, undo); cs.append(box);
     } else {
       let reason = '';
       const chips = el('div','chips');
@@ -426,7 +439,13 @@ function openLesson(l){
       REASONS.forEach(r => { const c = el('button','chip',r); c.onclick=()=>{ reason = reason===r?'':r; chips.querySelectorAll('.chip').forEach(x=>x.classList.toggle('on', x.textContent===reason)); why.value = reason; }; chips.appendChild(c); });
       const go = el('button','btn quiet',`${md(new Date(l.dateStr+'T00:00'))} 수업 취소`);
       go.onclick = () => { const r = why.value.trim(); closeSheet(); run(()=>store.cancel(l.id,l.dateStr,r),'취소로 표시했어요'); };
-      cs.append(chips, why, go);
+      const goFill = el('button','btn ghost','취소하고 이 자리에 보강 넣기');
+      goFill.onclick = () => {
+        const r = why.value.trim();
+        run(()=>store.cancel(l.id,l.dateStr,r),'취소로 표시했어요');
+        openAdd(dIdx, l.hour, l.col, { once:true, memo:`${l.name} 취소 자리` });
+      };
+      cs.append(chips, why, go, goFill);
     }
     sh.append(cs);
 
